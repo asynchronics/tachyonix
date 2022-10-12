@@ -1,0 +1,22 @@
+[package]
+name = "tachyonix-bench"
+version = "0.1.0"
+authors = ["Serge Barral <serge.barral@asynchronics.com>"]
+edition = "2021"
+rust-version = "1.59"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/asynchronics/tachyonix"
+
+[dependencies]
+asynchronix = { git = "https://github.com/asynchronics/asynchronix/", features = [ "dev-hooks" ] }
+async-channel = "1.7.1"
+async-std = "1.11"
+async-task = "4"
+flume = "0.10.14"
+lexopt = "0.2"
+num_cpus = "1.13"
+oorandom = "11.1"
+postage = "0.5.0"
+smolscale = "0.3.29"
+tachyonix = { path = "../tachyonix" }
+tokio = { version = "1.18", features = [ "sync", "rt-multi-thread" ] }
