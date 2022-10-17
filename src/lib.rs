@@ -2,7 +2,8 @@
 //! channel.
 //!
 //! This is a no-frills `async` bounded MPSC channel which only claim to fame is
-//! to be extremely fast.
+//! to be extremely fast, without taking any shortcuts on correctness
+//! and implementation quality.
 //!
 //! # Disconnection
 //!

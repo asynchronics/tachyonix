@@ -19,7 +19,8 @@ No laws of physics were broken in the making of this library.
 ## Overview
 
 This is a no-frills `async` channel which only claim to fame is to be extremely
-fast (see [benchmarks](#benchmarks)). Its performance mainly results from its
+fast (see [benchmarks](#benchmarks)), without taking any shortcuts on
+correctness and implementation quality. Its performance mainly results from its
 focus on the MPSC use-case and from a number of careful optimizations, among
 which:
 
@@ -27,7 +28,7 @@ which:
   empty-queue events (the latter is courtesy of
   [diatomic-waker][diatomic-waker], a fast, spinlock-free alternative to
   `atomic-waker`),
-- no allocation after the senders are created, even for blocked sender/receiver
+- no allocation once the senders are created, even for blocked sender/receiver
   notifications,
 - no spinlocks[^spinlocks] and conservative use of Mutexes (only used for
   blocked senders),
@@ -92,13 +93,14 @@ most other channels, sending requires mutable access to a `Sender`.
 
 ## Safety
 
-Despite the focus on performance, implementation quality and correctness are a
-very high priority. The library comes with a decent battery of tests, in
+Despite the focus on performance, implementation quality and correctness are the
+highest priority. The library comes with a decent battery of tests, in
 particular for all low-level (unsafe) concurrency primitives which are
-extensively tested with [Loom][loom]. As amazing as they are, however, Loom and
-MIRI cannot formally prove the absence of data races so soundness issues _are_
-possible. You should therefore exercise caution before using it in
-mission-critical software until it receives more testing in the wild.
+extensively tested with [Loom][loom], complemented with MIRI for integrations
+tests. As amazing as they are, however, Loom and MIRI cannot formally prove the
+absence of data races so soundness issues _are_ possible. You should therefore
+exercise caution before using it in mission-critical software until it receives
+more testing in the wild.
 
 [loom]: https://github.com/tokio-rs/loom
 
