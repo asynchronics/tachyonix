@@ -78,10 +78,20 @@ easily benchmarked against other channel implementations. The experiment turned
 out better than anticipated so a slightly more fleshed out version was released
 for public consumption in the hope that others may find it useful. However, its
 API surface is intentionally kept small and it does not aspire to become much
-more than it is today.
+more than it is today. It also makes some trade-offs that may or may not be
+acceptable depending on your use-case:
 
-Note also that, just like the bounded channel of the `futures` crate but unlike
-most other channels, sending requires mutable access to a `Sender`.
+* just like all other async channels except the MPSC channels in `tokio` and
+  `futures`, the effective capacity of the channel decreases with each forgotten
+  sender (i.e. senders that, for some reason, are no longer polled but were not
+  dropped) and the channel will eventually deadlock if the effective capacity
+  drops to zero; if this can happen in your application, you should probably use
+  `tokio`'s or `futures`'s channels.
+* just like the bounded channel of the `futures` crate but unlike most other
+  channels, sending requires mutable access to a `Sender`,
+* zero-capacity channels (a.k.a. rendez-vous channels) are not supported. 
+
+
 
 [sink]: https://docs.rs/futures/latest/futures/sink/trait.Sink.html
 
