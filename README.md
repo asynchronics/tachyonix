@@ -16,6 +16,7 @@ No laws of physics were broken in the making of this library.
 
 [asynchronix]: https://github.com/asynchronics/asynchronix
 
+
 ## Overview
 
 This is a no-frills `async` channel which only claim to fame is to be extremely
@@ -24,20 +25,17 @@ correctness and implementation quality. Its performance mainly results from its
 focus on the MPSC use-case and from a number of careful optimizations, among
 which:
 
-- aggressively optimized notification primitives for full-queue and
+- aggressively **optimized notification primitives** for full-queue and
   empty-queue events (the latter is courtesy of
   [diatomic-waker][diatomic-waker], a fast, spinlock-free alternative to
   `atomic-waker`),
-- no allocation once the senders are created, even for blocked sender/receiver
+- **no allocation** once the senders are created, even for blocked sender/receiver
   notifications,
-- no spinlocks[^spinlocks] and conservative use of Mutexes (only used for
-  blocked senders),
-- underlying queue optimized for the single receiver use-case.
+- **no spinlocks** whatsoever, and no mutex in the hot path (the only mutex is a
+  `std::sync::mutex` used for blocked senders notifications),
+- underlying queue **optimized for single receiver**.
 
 [diatomic-waker]: https://github.com/asynchronics/diatomic-waker
-
-[^spinlocks]: some MPMC channels use spinlocks, such as `crossbeam-channel` and
-    `async-channel` where they are required to linearize the underlying queue.
 
 
 ## Usage
@@ -78,18 +76,26 @@ easily benchmarked against other channel implementations. The experiment turned
 out better than anticipated so a slightly more fleshed out version was released
 for public consumption in the hope that others may find it useful. However, its
 API surface is intentionally kept small and it does not aspire to become much
-more than it is today. It also makes some trade-offs that may or may not be
-acceptable depending on your use-case:
+more than it is today. More importantly, it makes trade-offs that may or may not
+be acceptable depending on your use-case:
 
-* just like all other async channels except the MPSC channels in `tokio` and
-  `futures`, the effective capacity of the channel decreases with each forgotten
-  sender (i.e. senders that, for some reason, are no longer polled but were not
-  dropped) and the channel will eventually deadlock if the effective capacity
-  drops to zero; if this can happen in your application, you should probably use
-  `tokio`'s or `futures`'s channels.
-* just like the bounded channel of the `futures` crate but unlike most other
+* just like most other async channels except the MPSC channels in the `tokio`
+  and `futures` crates, fairness for blocked senders is not enforced: while the
+  first sender blocked on a full channel is indeed notified first, it may still
+  be outrun if another sender happens to be scheduled before; if your
+  application requires better fairness guarantees, you should use `tokio`'s or
+  `futures`'s channels.
+* just like most other async channels except the MPSC channels in the `futures`
+  crate, the effective capacity of the channel decreases with each "forgotten"
+  blocked sender (*i.e.* blocked senders which, for some reason, were not polled
+  to completion but were not dropped either) and the channel will eventually
+  deadlock if the effective capacity drops to zero; if this can happen in your
+  application, you should use `futures`'s channels.
+* just like most other async channel with the exception of `flume`, its
+  low-level primitives rely on `unsafe` (see [dedicated section](#safety)),
+* just like the bounded channels in the `futures` crate but unlike most other
   channels, sending requires mutable access to a `Sender`,
-* zero-capacity channels (a.k.a. rendez-vous channels) are not supported. 
+* zero-capacity channels (a.k.a. rendez-vous channels) are not supported.
 
 
 
@@ -104,13 +110,15 @@ acceptable depending on your use-case:
 ## Safety
 
 Despite the focus on performance, implementation quality and correctness are the
-highest priority. The library comes with a decent battery of tests, in
-particular for all low-level (unsafe) concurrency primitives which are
-extensively tested with [Loom][loom], complemented with MIRI for integrations
-tests. As amazing as they are, however, Loom and MIRI cannot formally prove the
-absence of data races so soundness issues _are_ possible. You should therefore
-exercise caution before using it in mission-critical software until it receives
-more testing in the wild.
+highest priority.
+
+The library comes with a decent battery of tests, in particular for all
+low-level (unsafe) concurrency primitives which are extensively tested with
+[Loom][loom], complemented with MIRI for integrations tests. As amazing as they
+are, however, Loom and MIRI cannot formally prove the absence of data races so
+soundness issues _are_ possible. You should therefore exercise caution before
+using it in mission-critical software until it receives more testing in the
+wild.
 
 [loom]: https://github.com/tokio-rs/loom
 
@@ -120,7 +128,7 @@ more testing in the wild.
 ### Benchmarks overview
 
 A custom [benchmarking suite][bench] was implemented that can test a number of
-popular MPSC and MPMS channels with several executors (Tokio, async-std,
+popular MPSC and MPMC channels with several executors (Tokio, async-std,
 smolscale and Asynchronix).
 
 It contains at the moment 2 benchmarks:
@@ -136,37 +144,50 @@ Each benchmark executes 61 instances of an elementary bench rig, which ensures
 that all executor threads are busy at nearly all times. The *pinball* benchmark
 is a relatively good proxy for performance in situations where channel receivers
 are often starved but senders are never blocked (i.e. the channel capacity is
-always sufficient). The *funnel* benchmark is less objective and more difficult
-to interpret as it is sensitive not only to the absolute speed of enqueue,
-dequeue and notifications, but can also be affected by their relative speed.
+always sufficient).
+
+Regardless of its popularity, the *funnel* benchmark is **less realistic and
+less objective** as it is sensitive not only to the absolute speed of enqueue,
+dequeue and notifications, but is also strongly affected by their relative speed
+and by other subtle details. Its extrapolation to real-life performance is
+rather debatable. 
 
 More information about these benchmarks can be found in the [bench repo][bench].
 
 [bench]: https://github.com/asynchronics/tachyobench/
 
+
 ### Benchmark results
+
+> Keep in mind that raw speed is not everything: every channel makes design
+> choices and trade-offs (regarding *e.g.* unsafety, fairness, mpmc support,
+> ...) which can have a significant impact on performance. Be sure to read the
+> sections about [limitations](#limitations) and [safety](#safety).
 
 The benchmarks were run on EC2 instances of comparable performance but different
 micro-architectures (Intel Ice Lake, AMD Zen 3, ARM Graviton 2). The reported
 performance is the mean number of messages per microsecond after averaging over
-10 benchmark runs.
+10 benchmark runs (higher is better).
 
 The reported results were obtained with Tokio, which in practice was found
 significantly faster than either async-std or smolscale. Asynchronix is faster
-yet, but probably less relevant as a baseline as it is not meant for
-general-purpose `async` programming.
+yet, but less relevant as a baseline as it is not meant for general-purpose
+`async` programming.
+
 
 #### EC2 c6i.2xlarge
 
-![Alt text](https://raw.githubusercontent.com/asynchronics/tachyobench/main/results/tokio_2022-11-10/c6i.2xlarge.png)
+![Alt text](https://raw.githubusercontent.com/asynchronics/tachyobench/4a5b19a8e49a0bb9d6c35fadb30398fd510c16fe/results/sha8024945_rustc1.64_tokio/c6i.2xlarge.png)
+
 
 #### EC2 c6a.2xlarge
 
-![Alt text](https://raw.githubusercontent.com/asynchronics/tachyobench/main/results/tokio_2022-11-10/c6a.2xlarge.png)
+![Alt text](https://raw.githubusercontent.com/asynchronics/tachyobench/4a5b19a8e49a0bb9d6c35fadb30398fd510c16fe/results/sha8024945_rustc1.64_tokio/c6a.2xlarge.png)
+
 
 #### EC2 c6g.2xlarge
 
-![Alt text](https://raw.githubusercontent.com/asynchronics/tachyobench/main/results/tokio_2022-11-10/c6g.2xlarge.png)
+![Alt text](https://raw.githubusercontent.com/asynchronics/tachyobench/4a5b19a8e49a0bb9d6c35fadb30398fd510c16fe/results/sha8024945_rustc1.64_tokio/c6g.2xlarge.png)
 
 
 ## License
