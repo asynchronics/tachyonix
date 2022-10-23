@@ -20,9 +20,6 @@
 //! typically accessed only once for each time a waiter is blocked and once for
 //! notifying, thus reducing the need for synchronization operations. Finally,
 //! spurious wake-ups are only generated in very rare circumstances.
-//!
-//! This implementation could be trivially modified to support a predicate that
-//! returns a value upon success.
 
 use std::future::Future;
 use std::marker::PhantomData;
