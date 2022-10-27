@@ -347,8 +347,16 @@ impl WaitSet {
     /// # Safety
     ///
     /// The specified notifier and all notifiers in the wait set must be alive.
+    /// The notifier should not be already in the wait set.
     unsafe fn insert(&self, notifier: NonNull<Notifier>) {
         let mut list = self.list.lock().unwrap();
+
+        #[cfg(any(debug_assertions, tachyonix_loom))]
+        if notifier.as_ref().in_wait_set.load(Ordering::Relaxed) {
+            drop(list); // avoids poisoning the lock
+            panic!("the notifier was already in the wait set");
+        }
+
         // Orderings: Relaxed ordering is sufficient since before this point the
         // notifier was not in the list and therefore not shared.
         notifier.as_ref().in_wait_set.store(true, Ordering::Relaxed);

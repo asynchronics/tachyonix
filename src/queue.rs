@@ -283,79 +283,79 @@ pub(super) enum PopError {
     Closed,
 }
 
-/// Queue producer.
-///
-/// This is a safe queue producer proxy used for testing purposes only.
-#[cfg(test)]
-struct Producer<T> {
-    inner: crate::loom_exports::sync::Arc<Queue<T>>,
-}
-#[cfg(test)]
-impl<T> Producer<T> {
-    /// Attempts to push an item into the queue.
-    fn push(&self, value: T) -> Result<(), PushError<T>> {
-        self.inner.push(value)
-    }
+#[cfg(all(test, any(not(miri), not(tachyonix_ignore_leaks))))]
+mod test_utils {
+    use super::*;
 
-    /// Closes the queue.
-    pub(super) fn close(&self) {
-        self.inner.close();
+    /// Queue producer.
+    ///
+    /// This is a safe queue producer proxy used for testing purposes only.
+    pub(super) struct Producer<T> {
+        inner: crate::loom_exports::sync::Arc<Queue<T>>,
     }
+    impl<T> Producer<T> {
+        /// Attempts to push an item into the queue.
+        pub(super) fn push(&self, value: T) -> Result<(), PushError<T>> {
+            self.inner.push(value)
+        }
 
-    /// Checks if the queue is closed.
-    #[cfg(not(tachyonix_loom))]
-    fn is_closed(&self) -> bool {
-        self.inner.is_closed()
-    }
-}
-#[cfg(test)]
-impl<T> Clone for Producer<T> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
+        /// Closes the queue.
+        pub(super) fn close(&self) {
+            self.inner.close();
+        }
+
+        /// Checks if the queue is closed.
+        #[cfg(not(tachyonix_loom))]
+        pub(super) fn is_closed(&self) -> bool {
+            self.inner.is_closed()
         }
     }
-}
-
-/// Queue consumer.
-///
-/// This is a safe queue consumer proxy used for testing purposes only.
-#[cfg(test)]
-struct Consumer<T> {
-    inner: crate::loom_exports::sync::Arc<Queue<T>>,
-}
-#[cfg(test)]
-impl<T> Consumer<T> {
-    /// Attempts to pop an item from the queue.
-    fn pop(&mut self) -> Result<T, PopError> {
-        // Safety: single-thread access is guaranteed since the consumer does
-        // not implement `Clone` and `pop` requires exclusive ownership.
-        unsafe { self.inner.pop() }
+    impl<T> Clone for Producer<T> {
+        fn clone(&self) -> Self {
+            Self {
+                inner: self.inner.clone(),
+            }
+        }
     }
 
-    /// Closes the queue.
-    fn close(&self) {
-        self.inner.close();
+    /// Queue consumer.
+    ///
+    /// This is a safe queue consumer proxy used for testing purposes only.
+    pub(super) struct Consumer<T> {
+        inner: crate::loom_exports::sync::Arc<Queue<T>>,
     }
-}
+    impl<T> Consumer<T> {
+        /// Attempts to pop an item from the queue.
+        pub(super) fn pop(&mut self) -> Result<T, PopError> {
+            // Safety: single-thread access is guaranteed since the consumer does
+            // not implement `Clone` and `pop` requires exclusive ownership.
+            unsafe { self.inner.pop() }
+        }
 
-#[cfg(test)]
-fn queue<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
-    let inner = crate::loom_exports::sync::Arc::new(Queue::new(capacity));
+        /// Closes the queue.
+        pub(super) fn close(&self) {
+            self.inner.close();
+        }
+    }
 
-    let producer = Producer {
-        inner: inner.clone(),
-    };
-    let consumer = Consumer {
-        inner: inner.clone(),
-    };
+    pub(super) fn queue<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
+        let inner = crate::loom_exports::sync::Arc::new(Queue::new(capacity));
 
-    (producer, consumer)
+        let producer = Producer {
+            inner: inner.clone(),
+        };
+        let consumer = Consumer {
+            inner: inner.clone(),
+        };
+
+        (producer, consumer)
+    }
 }
 
 /// Regular tests.
-#[cfg(all(test, not(tachyonix_loom)))]
+#[cfg(all(test, not(tachyonix_loom), any(not(miri), not(tachyonix_ignore_leaks))))]
 mod tests {
+    use super::test_utils::*;
     use super::*;
 
     use std::thread;
@@ -484,6 +484,7 @@ mod tests {
 /// Loom tests.
 #[cfg(all(test, tachyonix_loom))]
 mod tests {
+    use super::test_utils::*;
     use super::*;
 
     use loom::model::Builder;
