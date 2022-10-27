@@ -88,7 +88,7 @@ pub struct Sender<T> {
     /// Shared data.
     inner: Arc<Inner<T>>,
     /// A cached notifier.
-    notifier: Notifier,
+    notifier: Option<Box<Notifier>>,
 }
 
 impl<T> Sender<T> {
@@ -107,11 +107,18 @@ impl<T> Sender<T> {
     /// Sends a message asynchronously, if necessary waiting until enough
     /// capacity becomes available.
     pub async fn send(&mut self, message: T) -> Result<(), SendError<T>> {
-        let mut message = Some(message);
+        // Unless the previous send future was not polled to completion, there
+        // should be a cached notifier to take.
+        let notifier = self
+            .notifier
+            .take()
+            .unwrap_or_else(|| Box::new(Notifier::new()));
 
-        self.inner
+        let mut message = Some(message);
+        let notifier = self
+            .inner
             .sender_signal
-            .wait_until(&mut self.notifier, || {
+            .wait_until(notifier, || {
                 match self.inner.queue.push(message.take().unwrap()) {
                     Ok(()) => Some(()),
                     Err(PushError::Full(v)) => {
@@ -129,7 +136,11 @@ impl<T> Sender<T> {
                     }
                 }
             })
-            .await;
+            .await
+            .1;
+
+        // Cache the notifier with its waker.
+        self.notifier = Some(notifier);
 
         match message {
             Some(v) => Err(SendError(v)),
@@ -176,7 +187,7 @@ impl<T> Clone for Sender<T> {
 
         Self {
             inner: self.inner.clone(),
-            notifier: Notifier::new(),
+            notifier: Some(Box::new(Notifier::new())),
         }
     }
 }
@@ -363,7 +374,7 @@ pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
 
     let sender = Sender {
         inner: inner.clone(),
-        notifier: Notifier::new(),
+        notifier: Some(Box::new(Notifier::new())),
     };
     let receiver = Receiver { inner };
 
