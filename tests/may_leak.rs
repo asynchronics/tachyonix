@@ -14,7 +14,7 @@ fn forget_send_future_drop_sender() {
     let (s, mut r) = channel(1);
 
     // Boxing so that MIRI can identify invalidated memory access via use-after-free.
-    let mut s = Box::new(s);
+    let s = Box::new(s);
 
     s.try_send(13).unwrap();
 
@@ -59,7 +59,7 @@ fn forget_send_future_forget_sender() {
 fn forget_send_future_reuse_sender() {
     let (s, mut r) = channel(1);
 
-    let mut s = ManuallyDrop::new(s);
+    let s = ManuallyDrop::new(s);
     s.try_send(7).unwrap();
 
     let mut s_fut1 = ManuallyDrop::new(s.send(13));

@@ -29,8 +29,7 @@ which:
   empty-queue events (the latter is courtesy of
   [diatomic-waker][diatomic-waker], a fast, spinlock-free alternative to
   `atomic-waker`),
-- **no allocation** once the senders are created, even for blocked sender/receiver
-  notifications,
+- **no allocation** except for blocked sender notifications,
 - **no spinlocks** whatsoever, and no mutex in the hot path (the only mutex is a
   `std::sync::mutex` used for blocked senders notifications),
 - underlying queue **optimized for single receiver**.
@@ -56,7 +55,7 @@ use futures_executor::{block_on, ThreadPool};
 
 let pool = ThreadPool::new().unwrap();
 
-let (mut s, mut r) = tachyonix::channel(3);
+let (s, mut r) = tachyonix::channel(3);
 
 block_on( async move {
     pool.spawn_ok( async move {
@@ -93,8 +92,6 @@ be acceptable depending on your use-case:
   application, you should use `futures`'s channels.
 * just like most other async channel with the exception of `flume`, its
   low-level primitives rely on `unsafe` (see [dedicated section](#safety)),
-* just like the bounded channels in the `futures` crate but unlike most other
-  channels, sending requires mutable access to a `Sender`,
 * zero-capacity channels (a.k.a. rendez-vous channels) are not supported.
 
 

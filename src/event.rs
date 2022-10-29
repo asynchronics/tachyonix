@@ -6,21 +6,12 @@
 //! predicate is satisfied by checking the predicate each time it receives a
 //! notification.
 //!
-//! The `event_listener` crate is an example of such a primitive, but it is not
-//! strongly optimized, in particular when it comes to the async use-case: it
-//! requires more locking operations, more allocations and more waker cloning
-//! operations than necessary. These costs may be small compared to thread
-//! suspension, but in the context of async rust where tasks are suspended in
-//! user space without kernel calls, they become sizable.
-//!
-//! This implementation tries to improve on all those aspects. In particular,
-//! allocated notifiers can be re-used so that allocation is only necessary once
-//! for each task. Also, because the last waker is cached in the re-used
-//! notifiers, waker cloning is typically only necessary the first time a task
-//! needs awaiting. The underlying list of notifiers is typically accessed only
-//! once for each time a waiter is blocked and once for notifying, thus reducing
-//! the need for synchronization operations. Finally, spurious wake-ups are only
-//! generated in very rare circumstances.
+//! This implementation tries to improve on the similar `event_listener` crate
+//! by limiting the number of locking operations on the mutex-protected list of
+//! notifiers: the lock is typically taken only once for each time a waiter is
+//! blocked and once for notifying, thus reducing the need for synchronization
+//! operations. Finally, spurious wake-ups are only generated in very rare
+//! circumstances.
 
 use std::future::Future;
 use std::mem;
@@ -59,13 +50,9 @@ impl Event {
         // both).
         atomic::fence(Ordering::SeqCst);
 
-        // Safety: this notifier and all other notifiers in the wait set are
-        // guaranteed to be alive since the `WaitUntil` drop handler ensures
-        // that the notifier is removed from the wait set before notifier
-        // ownership is surrendered to the caller. Wakers which notifier is in
-        // the wait set are never accessed mutably since `WaitUntil::poll`
-        // always removes a notifier from the wait set before accessing it
-        // mutably.
+        // Safety: all notifiers in the wait set are guaranteed to be alive
+        // since the `WaitUntil` drop handler ensures that notifiers are removed
+        // from the wait set before they are deallocated.
         unsafe {
             self.wait_set.notify_relaxed(n);
         }
@@ -73,17 +60,8 @@ impl Event {
 
     /// Returns a future that can be `await`ed until the provided predicate is
     /// satisfied.
-    ///
-    /// # Leaks
-    ///
-    /// The Boxed notifier will be leaked unless it is later retrieved from the
-    /// returned `WaitUntil` with `into_boxed_notifier`.
-    pub(super) fn wait_until<F: FnMut() -> Option<T>, T>(
-        &self,
-        notifier: Box<Notifier>,
-        predicate: F,
-    ) -> WaitUntil<F, T> {
-        WaitUntil::new(&self.wait_set, notifier, predicate)
+    pub(super) fn wait_until<F: FnMut() -> Option<T>, T>(&self, predicate: F) -> WaitUntil<F, T> {
+        WaitUntil::new(&self.wait_set, predicate)
     }
 }
 
@@ -92,15 +70,15 @@ unsafe impl Sync for Event {}
 
 /// A waker wrapper that can be inserted in a list.
 ///
-/// In theory, a notifier always has an exclusive owner or borrower, except in
-/// one edge case: the `in_wait_set` flag may be read by the `WaitSet::remove()`
-/// method while the notifier is concurrently accessed under a Mutex by one of
-/// the `WaitSet` methods. So technically, 2 reference to a `Notifier` *may*
-/// exist at the same time, but the only field that may be accessed concurrently
-/// is `in_wait_set`, which is atomic.
+/// A notifier always has an exclusive owner or borrower, except in one edge
+/// case: the `WaitSet::remove_relaxed()` method may create a shared reference
+/// while the notifier is concurrently accessed under the `wait_set` mutex by
+/// one of the `WaitSet` methods. So occasionally 2 references to a `Notifier`
+/// will exist at the same time, meaning that even when accessed under the
+/// `wait_set` mutex, a notifier can only be accessed by reference.
 pub(super) struct Notifier {
-    /// The cached or current waker.
-    waker: UnsafeCell<Option<Waker>>,
+    /// The current waker, if any.
+    waker: Option<Waker>,
     /// Pointer to the previous wait set notifier.
     prev: UnsafeCell<Option<NonNull<Notifier>>>,
     /// Pointer to the next wait set notifier.
@@ -113,7 +91,7 @@ impl Notifier {
     /// Creates a new Notifier without any registered waker.
     pub(super) fn new() -> Self {
         Self {
-            waker: UnsafeCell::new(None),
+            waker: None,
             prev: UnsafeCell::new(None),
             next: UnsafeCell::new(None),
             in_wait_set: AtomicBool::new(false),
@@ -122,47 +100,22 @@ impl Notifier {
 
     /// Stores the specified waker if it differs from the cached waker.
     fn set_waker(&mut self, waker: &Waker) {
-        // Safety: the caller claims unique ownership of the notifier so
-        // changing the waker is actually safe: the need to use `unsafe` is a
-        // shortcoming of `loom` as `std::cell::UnsafeCell` does have a safe
-        // `get_mut` method.
-        unsafe {
-            self.waker.with_mut(|w| {
-                if match &*w {
-                    Some(w) => !w.will_wake(waker),
-                    None => true,
-                } {
-                    *w = Some(waker.clone());
-                }
-            });
+        if match &self.waker {
+            Some(w) => !w.will_wake(waker),
+            None => true,
+        } {
+            self.waker = Some(waker.clone());
         }
     }
 
     /// Notifies the task.
     fn wake(&self) {
-        // Safety: the caller claims shared (non-mutable) ownership of the
-        // notifier and is therefore responsible for ensuring that there is no
-        // concurrent mutable access, so reading the waker is actually safe.
-        unsafe {
-            self.waker.with(|w| {
-                if let Some(w) = &*w {
-                    w.wake_by_ref()
-                }
-            });
-        }
-    }
-}
-
-impl Drop for Notifier {
-    fn drop(&mut self) {
-        // Safety: we have unique ownership of the notifier so dropping the
-        // waker is actually safe: the need to use `unsafe` is a shortcoming of
-        // `loom` as `std::cell::UnsafeCell` does have a safe `get_mut` method.
-        unsafe {
-            self.waker.with_mut(|w| {
-                // Drop the waker, if any.
-                (*w).take();
-            });
+        // Safety: the waker is only ever accessed mutably when the notifier is
+        // itself accessed mutably. The caller claims shared (non-mutable)
+        // ownership of the notifier, so there is not possible concurrent
+        // mutable access to the notifier and therefore to the waker.
+        if let Some(w) = &self.waker {
+            w.wake_by_ref();
         }
     }
 }
@@ -175,61 +128,39 @@ pub(super) struct WaitUntil<'a, F: FnMut() -> Option<T>, T> {
     state: WaitUntilState,
     predicate: F,
     wait_set: &'a WaitSet,
-    notifier: NonNull<Notifier>,
 }
 
 impl<'a, F: FnMut() -> Option<T>, T> WaitUntil<'a, F, T> {
     /// Creates a future associated with the specified event sink that can be
     /// `await`ed until the specified predicate is satisfied.
-    ///
-    /// If the notifier contains a waker, this waker will be re-used if
-    /// possible.
-    fn new(wait_set: &'a WaitSet, notifier: Box<Notifier>, predicate: F) -> Self {
+    fn new(wait_set: &'a WaitSet, predicate: F) -> Self {
         Self {
             state: WaitUntilState::Idle,
             predicate,
             wait_set,
-            notifier: unsafe { NonNull::new_unchecked(Box::into_raw(notifier)) },
         }
     }
 }
 
 impl<F: FnMut() -> Option<T>, T> Drop for WaitUntil<'_, F, T> {
     fn drop(&mut self) {
-        match self.state {
-            // If the future was completed, then the notifier is no longer in
-            // the wait set, and the boxed notifier was already moved out so
-            // there is nothing left to do.
-            WaitUntilState::Completed => return,
+        if let WaitUntilState::Polled(notifier) = self.state {
             // If we are in the `Polled` stated, it means that the future was
             // cancelled and its notifier may still be in the wait set: it is
             // necessary to cancel the notifier so that another event sink can
             // be notified if one is registered, and then to deallocate the
             // notifier.
-            WaitUntilState::Polled => {
-                // Safety: this notifier and all other notifiers in the wait set are
-                // guaranteed to be alive since the `WaitUntil` drop handler and the
-                // `into_boxed_notifier` method ensure that the notifier is removed
-                // from the wait set before notifier ownership is surrendered to the
-                // caller. Wakers which notifier is in the wait set are never
-                // accessed mutably since `WaitUntil::poll` always removes the
-                // notifier from the wait set before accessing it mutably.
-                unsafe {
-                    self.wait_set.cancel(self.notifier);
-                }
-            }
-            // If we are in the `Idle` state then the notifier was never
-            // inserted into the wait set, so all what is left to do is to
+            //
+            // Safety: all notifiers in the wait set are guaranteed to be alive
+            // since this drop handler ensures that notifiers are removed from
+            // the wait set before they are deallocated. After the notifier is
+            // removed from the list we can claim unique ownership and
             // deallocate the notifier.
-            WaitUntilState::Idle => {}
+            unsafe {
+                self.wait_set.cancel(notifier);
+                let _ = Box::from_raw(notifier.as_ptr());
+            }
         }
-
-        // The future did not run to completion: deallocate the notifier.
-        //
-        // Safety: the notifier is no longer in the wait set and was not moved
-        // out since the future did not run to completion, so we can claim
-        // unique ownership.
-        let _ = unsafe { Box::from_raw(self.notifier.as_ptr()) };
     }
 }
 
@@ -238,7 +169,7 @@ impl<'a, F: FnMut() -> Option<T>, T> Unpin for WaitUntil<'a, F, T> {}
 unsafe impl<F: (FnMut() -> Option<T>) + Send, T: Send> Send for WaitUntil<'_, F, T> {}
 
 impl<'a, F: FnMut() -> Option<T>, T> Future for WaitUntil<'a, F, T> {
-    type Output = (T, Box<Notifier>);
+    type Output = T;
 
     #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -269,38 +200,46 @@ impl<'a, F: FnMut() -> Option<T>, T> Future for WaitUntil<'a, F, T> {
         //    set, the event source may notify event sink A (which is no longer
         //    interested) rather than event sink B, meaning that event sink B
         //    will never be notified.
-        if self.state == WaitUntilState::Polled {
-            // Safety: this notifier and all other notifiers in the wait set are
-            // guaranteed to be alive since the `WaitUntil` drop handler ensures
-            // that the notifier is removed from the wait set before notifier
-            // ownership is surrendered to the caller.
-            unsafe { self.wait_set.remove_relaxed(self.notifier) };
+        if let WaitUntilState::Polled(notifier) = self.state {
+            // Safety: all notifiers in the wait set are guaranteed to be alive
+            // since the `WaitUntil` drop handler ensures that notifiers are
+            // removed from the wait set before they are deallocated. Using the
+            // relaxed version of `notify` is enough since the notifier was
+            // inserted in the same future so there exists a happen-before
+            // relationship with the insertion operation.
+            unsafe { self.wait_set.remove_relaxed(notifier) };
         }
 
         // Fast path.
         if let Some(v) = (self.predicate)() {
+            if let WaitUntilState::Polled(notifier) = self.state {
+                // Safety: the notifier is no longer in the wait set so we can
+                // claim unique ownership and deallocate the notifier.
+                let _ = unsafe { Box::from_raw(notifier.as_ptr()) };
+            }
+
             self.state = WaitUntilState::Completed;
 
-            // Safety: the notifier is no longer in the wait set (if the state
-            // was `Polled`) or has never been (if the state was `Idle`), so we
-            // can claim unique ownership.
-            let notifier = unsafe { Box::from_raw(self.notifier.as_ptr()) };
-
-            return Poll::Ready((v, notifier));
+            return Poll::Ready(v);
         }
+
+        let mut notifier = if let WaitUntilState::Polled(notifier) = self.state {
+            notifier
+        } else {
+            unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(Notifier::new()))) }
+        };
 
         // Set or update the notifier.
         //
         // Safety: the notifier is not (or no longer) in the wait list so we
         // have exclusive ownership.
         let waker = cx.waker();
-        unsafe { self.notifier.as_mut().set_waker(waker) };
+        unsafe { notifier.as_mut().set_waker(waker) };
 
-        // Safety: this notifier and all other notifiers in the wait set are
-        // guaranteed to be alive since the `WaitUntil` drop handler ensures
-        // that the notifier is removed from the wait set before notifier
-        // ownership is surrendered to the caller.
-        unsafe { self.wait_set.insert(self.notifier) };
+        // Safety: all notifiers in the wait set are guaranteed to be alive
+        // since the `WaitUntil` drop handler ensures that notifiers are removed
+        // from the wait set before they are deallocated.
+        unsafe { self.wait_set.insert(notifier) };
 
         // This fence synchronizes with the other fence in `Event::notify` and
         // ensures that either the predicate below will be satisfied or the
@@ -333,24 +272,23 @@ impl<'a, F: FnMut() -> Option<T>, T> Future for WaitUntil<'a, F, T> {
             //    the wait set without notifying another event sink, then event
             //    sink B will never be notified.
             //
-            // Safety: this notifier and all other notifiers in the wait set are
-            // guaranteed to be alive since the `WaitUntil` drop handler ensures
-            // that the notifier is removed from the wait set before notifier
-            // ownership is surrendered to the caller.
+            // Safety: all notifiers in the wait set are guaranteed to be alive
+            // since the `WaitUntil` drop handler ensures that notifiers are
+            // removed from the wait set before they are deallocated.
             unsafe {
-                self.wait_set.cancel(self.notifier);
+                self.wait_set.cancel(notifier);
             }
 
             self.state = WaitUntilState::Completed;
 
             // Safety: the notifier is not longer in the wait set so we can
-            // claim unique ownership.
-            let notifier = unsafe { Box::from_raw(self.notifier.as_ptr()) };
+            // claim unique ownership and deallocate the notifier.
+            let _ = unsafe { Box::from_raw(notifier.as_ptr()) };
 
-            return Poll::Ready((v, notifier));
+            return Poll::Ready(v);
         }
 
-        self.state = WaitUntilState::Polled;
+        self.state = WaitUntilState::Polled(notifier);
 
         Poll::Pending
     }
@@ -360,7 +298,7 @@ impl<'a, F: FnMut() -> Option<T>, T> Future for WaitUntil<'a, F, T> {
 #[derive(PartialEq)]
 enum WaitUntilState {
     Idle,
-    Polled,
+    Polled(NonNull<Notifier>),
     Completed,
 }
 
@@ -828,7 +766,7 @@ mod tests {
     struct WaitUntilClosure {
         event: Arc<Event>,
         token_counter: Arc<Counter>,
-        wait_until: Option<Box<dyn Future<Output = ((), Box<Notifier>)>>>,
+        wait_until: Option<Box<dyn Future<Output = ()>>>,
         _pin: PhantomPinned,
     }
 
@@ -852,9 +790,7 @@ mod tests {
             // that the `WaitUntil` future does not outlive the captured
             // references.
             let wait_until: Box<dyn Future<Output = _>> = unsafe {
-                Box::new((*event_ptr).wait_until(Box::new(Notifier::new()), move || {
-                    (*token_counter_ptr).try_decrement()
-                }))
+                Box::new((*event_ptr).wait_until(move || (*token_counter_ptr).try_decrement()))
             };
             let mut pinned_box: Pin<Box<WaitUntilClosure>> = boxed.into();
 
@@ -868,9 +804,7 @@ mod tests {
         }
 
         /// Returns a pinned, type-erased `WaitUntil` future.
-        fn as_pinned_future(
-            self: Pin<&mut Self>,
-        ) -> Pin<&mut dyn Future<Output = ((), Box<Notifier>)>> {
+        fn as_pinned_future(self: Pin<&mut Self>) -> Pin<&mut dyn Future<Output = ()>> {
             unsafe { self.map_unchecked_mut(|s| s.wait_until.as_mut().unwrap().as_mut()) }
         }
     }
