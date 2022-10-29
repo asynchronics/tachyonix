@@ -50,6 +50,7 @@ impl Event {
     ///
     /// If less events than requested are currently awaiting, then all awaiting
     /// event are notified.
+    #[inline(always)]
     pub(super) fn notify(&self, n: usize) {
         // This fence synchronizes with the other fence in `WaitUntil::poll` and
         // ensures that either the `poll` method will successfully check the
@@ -66,7 +67,7 @@ impl Event {
         // always removes a notifier from the wait set before accessing it
         // mutably.
         unsafe {
-            self.wait_set.notify(n);
+            self.wait_set.notify_relaxed(n);
         }
     }
 
@@ -239,6 +240,7 @@ unsafe impl<F: (FnMut() -> Option<T>) + Send, T: Send> Send for WaitUntil<'_, F,
 impl<'a, F: FnMut() -> Option<T>, T> Future for WaitUntil<'a, F, T> {
     type Output = (T, Box<Notifier>);
 
+    #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         assert!(self.state != WaitUntilState::Completed);
 
@@ -272,7 +274,7 @@ impl<'a, F: FnMut() -> Option<T>, T> Future for WaitUntil<'a, F, T> {
             // guaranteed to be alive since the `WaitUntil` drop handler ensures
             // that the notifier is removed from the wait set before notifier
             // ownership is surrendered to the caller.
-            unsafe { self.wait_set.remove(self.notifier) };
+            unsafe { self.wait_set.remove_relaxed(self.notifier) };
         }
 
         // Fast path.
@@ -401,13 +403,21 @@ impl WaitSet {
     /// Remove the specified notifier if it is still in the wait set.
     ///
     /// After a call to `remove`, the caller is guaranteed that the wait set
-    /// will no longer access the specified notifier. This operation is
-    /// typically very fast if the notifier is not in the wait set.
+    /// will no longer access the specified notifier.
+    ///
+    /// Note that for performance reasons, the presence of the notifier in the
+    /// list is checked without acquiring the lock. This fast check will never
+    /// lead to a notifier staying in the list as long as there exists an
+    /// happens-before relationship between this call and the earlier call to
+    /// `insert`. A happens-before relationship always exists if these calls are
+    /// made on the same thread or across `await` points.
     ///
     /// # Safety
     ///
     /// The specified notifier and all notifiers in the wait set must be alive.
-    unsafe fn remove(&self, notifier: NonNull<Notifier>) {
+    /// This function may fail to remove the notifier if a happens-before
+    /// relationship does not exist with the previous call to `insert`.
+    unsafe fn remove_relaxed(&self, notifier: NonNull<Notifier>) {
         // Preliminarily check whether the notifier is already in the list (fast
         // path).
         //
@@ -427,6 +437,18 @@ impl WaitSet {
             return;
         }
 
+        self.remove(notifier);
+    }
+
+    /// Remove the specified notifier if it is still in the wait set.
+    ///
+    /// After a call to `remove`, the caller is guaranteed that the wait set
+    /// will no longer access the specified notifier.
+    ///
+    /// # Safety
+    ///
+    /// The specified notifier and all notifiers in the wait set must be alive.
+    unsafe fn remove(&self, notifier: NonNull<Notifier>) {
         let mut list = self.list.lock().unwrap();
 
         // Check again whether the notifier is already in the list
@@ -521,12 +543,24 @@ impl WaitSet {
     ///
     /// All notifiers in the wait set must be alive. Wakers of notifiers which
     /// pointer is in the wait set may not be accessed mutably.
-    unsafe fn notify(&self, count: usize) {
+    #[inline(always)]
+    unsafe fn notify_relaxed(&self, count: usize) {
         let is_empty = self.is_empty.load(Ordering::Relaxed);
         if is_empty {
             return;
         }
 
+        self.notify(count);
+    }
+
+    /// Send a notification to `count` notifiers within the wait set, or to all
+    /// notifiers if the wait set contains less than `count` notifiers.
+    ///
+    /// # Safety
+    ///
+    /// All notifiers in the wait set must be alive. Wakers of notifiers which
+    /// pointer is in the wait set may not be accessed mutably.
+    unsafe fn notify(&self, count: usize) {
         let mut list = self.list.lock().unwrap();
         for _ in 0..count {
             let notifier = {
