@@ -95,6 +95,12 @@ jobs:
         env:
           MIRIFLAGS: -Zmiri-strict-provenance
 
+      - name: Run cargo miri (ignore leaks)
+        run: cargo miri test --tests
+        env:
+          RUSTFLAGS: --cfg tachyonix_ignore_leaks
+          MIRIFLAGS: -Zmiri-strict-provenance -Zmiri-ignore-leaks
+
   lints:
     name: Lints
     runs-on: ubuntu-latest
