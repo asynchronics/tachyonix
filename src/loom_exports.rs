@@ -4,7 +4,7 @@ pub(crate) mod sync {
     pub(crate) use loom::sync::{Arc, Mutex};
 
     pub(crate) mod atomic {
-        pub(crate) use loom::sync::atomic::{fence, AtomicBool, AtomicPtr, AtomicUsize};
+        pub(crate) use loom::sync::atomic::{fence, AtomicBool, AtomicUsize};
     }
 }
 #[cfg(not(tachyonix_loom))]
@@ -13,7 +13,7 @@ pub(crate) mod sync {
     pub(crate) use std::sync::{Arc, Mutex};
 
     pub(crate) mod atomic {
-        pub(crate) use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize};
+        pub(crate) use std::sync::atomic::{AtomicBool, AtomicUsize};
 
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), not(miri)))]
         #[inline(always)]

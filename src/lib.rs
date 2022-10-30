@@ -25,7 +25,7 @@
 //!
 //! let pool = ThreadPool::new().unwrap();
 //!
-//! let (mut s, mut r) = tachyonix::channel(3);
+//! let (s, mut r) = tachyonix::channel(3);
 //!
 //! block_on( async move {
 //!     pool.spawn_ok( async move {
@@ -34,6 +34,7 @@
 //!     
 //!     assert_eq!(r.recv().await, Ok("Hello"));
 //! });
+//! # std::thread::sleep(std::time::Duration::from_millis(100)); // MIRI bug workaround
 //! ```
 //!
 #![warn(missing_docs, missing_debug_implementations, unreachable_pub)]
@@ -54,7 +55,7 @@ use std::task::Poll;
 use diatomic_waker::primitives::DiatomicWaker;
 use futures_core::Stream;
 
-use crate::event::{Event, Notifier};
+use crate::event::Event;
 use crate::queue::{PopError, PushError, Queue};
 
 /// Shared channel data.
@@ -87,13 +88,11 @@ impl<T> Inner<T> {
 pub struct Sender<T> {
     /// Shared data.
     inner: Arc<Inner<T>>,
-    /// A cached notifier.
-    notifier: Option<Box<Notifier>>,
 }
 
 impl<T> Sender<T> {
     /// Attempts to send a message immediately.
-    pub fn try_send(&mut self, message: T) -> Result<(), TrySendError<T>> {
+    pub fn try_send(&self, message: T) -> Result<(), TrySendError<T>> {
         match self.inner.queue.push(message) {
             Ok(()) => {
                 self.inner.receiver_signal.notify();
@@ -106,19 +105,13 @@ impl<T> Sender<T> {
 
     /// Sends a message asynchronously, if necessary waiting until enough
     /// capacity becomes available.
-    pub async fn send(&mut self, message: T) -> Result<(), SendError<T>> {
+    pub async fn send(&self, message: T) -> Result<(), SendError<T>> {
         // Unless the previous send future was not polled to completion, there
         // should be a cached notifier to take.
-        let notifier = self
-            .notifier
-            .take()
-            .unwrap_or_else(|| Box::new(Notifier::new()));
-
         let mut message = Some(message);
-        let notifier = self
-            .inner
+        self.inner
             .sender_signal
-            .wait_until(notifier, || {
+            .wait_until(|| {
                 match self.inner.queue.push(message.take().unwrap()) {
                     Ok(()) => Some(()),
                     Err(PushError::Full(v)) => {
@@ -136,11 +129,7 @@ impl<T> Sender<T> {
                     }
                 }
             })
-            .await
-            .1;
-
-        // Cache the notifier with its waker.
-        self.notifier = Some(notifier);
+            .await;
 
         match message {
             Some(v) => Err(SendError(v)),
@@ -187,7 +176,6 @@ impl<T> Clone for Sender<T> {
 
         Self {
             inner: self.inner.clone(),
-            notifier: Some(Box::new(Notifier::new())),
         }
     }
 }
@@ -374,7 +362,6 @@ pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
 
     let sender = Sender {
         inner: inner.clone(),
-        notifier: Some(Box::new(Notifier::new())),
     };
     let receiver = Receiver { inner };
 

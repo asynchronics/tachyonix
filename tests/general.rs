@@ -41,7 +41,7 @@ fn poll_once_and_keep_alive<F: Future>(f: F, millis: u64) -> Poll<F::Output> {
 #[cfg(not(miri))]
 #[test]
 fn try_send_recv() {
-    let (mut s, mut r) = channel(2);
+    let (s, mut r) = channel(2);
 
     let th_send = thread::spawn(move || {
         sleep(100);
@@ -67,7 +67,7 @@ fn try_send_recv() {
 #[cfg(not(miri))]
 #[test]
 fn async_send() {
-    let (mut s, mut r) = channel(2);
+    let (s, mut r) = channel(2);
 
     let th_send = thread::spawn(move || {
         block_on(s.send(3)).unwrap();
@@ -92,7 +92,7 @@ fn async_send() {
 #[cfg(not(miri))]
 #[test]
 fn async_recv() {
-    let (mut s, mut r) = channel(100);
+    let (s, mut r) = channel(100);
 
     let th_send = thread::spawn(move || {
         sleep(100);
@@ -114,7 +114,7 @@ fn async_recv() {
 // Channel closed due to the receiver being dropped.
 #[test]
 fn send_after_close() {
-    let (mut s, r) = channel(100);
+    let (s, r) = channel(100);
 
     block_on(s.send(3)).unwrap();
     block_on(s.send(7)).unwrap();
@@ -130,8 +130,8 @@ fn send_after_close() {
 #[cfg(not(miri))]
 #[test]
 fn blocked_send_after_close() {
-    let (mut s1, r) = channel(2);
-    let mut s2 = s1.clone();
+    let (s1, r) = channel(2);
+    let s2 = s1.clone();
 
     block_on(s1.send(3)).unwrap();
     block_on(s1.send(7)).unwrap();
@@ -153,8 +153,8 @@ fn blocked_send_after_close() {
 // Channel closed due to the senders being dropped.
 #[test]
 fn recv_after_close() {
-    let (mut s1, mut r) = channel(100);
-    let mut s2 = s1.clone();
+    let (s1, mut r) = channel(100);
+    let s2 = s1.clone();
 
     block_on(s1.send(3)).unwrap();
     block_on(s1.send(7)).unwrap();
@@ -175,8 +175,8 @@ fn recv_after_close() {
 #[cfg(not(miri))]
 #[test]
 fn blocked_recv_after_close() {
-    let (mut s1, mut r) = channel(100);
-    let mut s2 = s1.clone();
+    let (s1, mut r) = channel(100);
+    let s2 = s1.clone();
 
     block_on(s1.send(3)).unwrap();
     block_on(s1.send(7)).unwrap();
@@ -202,8 +202,8 @@ fn blocked_recv_after_close() {
 #[cfg(not(miri))]
 #[test]
 fn cancel_async_send() {
-    let (mut s1, mut r) = channel(2);
-    let mut s2 = s1.clone();
+    let (s1, mut r) = channel(2);
+    let s2 = s1.clone();
 
     // Fill the channel and block a sender, then cancel the sending operation at
     // t0 + 300.
@@ -240,8 +240,8 @@ fn cancel_async_send() {
 #[cfg(not(miri))]
 #[test]
 fn forget_async_send() {
-    let (mut s1, mut r) = channel(2);
-    let mut s2 = s1.clone();
+    let (s1, mut r) = channel(2);
+    let s2 = s1.clone();
 
     // Fill the channel and block a sender, then stop polling it for a long
     // time.
@@ -280,7 +280,7 @@ fn spsc_stress() {
     const CAPACITY: usize = 3;
     const COUNT: usize = if cfg!(miri) { 50 } else { 1_000_000 };
 
-    let (mut s, mut r) = channel(CAPACITY);
+    let (s, mut r) = channel(CAPACITY);
 
     let th_send = thread::spawn(move || {
         block_on(async {
@@ -313,7 +313,7 @@ fn mpsc_stress() {
     let (s, mut r) = channel(CAPACITY);
 
     let th_send = (0..THREADS).map(|_| {
-        let mut s = s.clone();
+        let s = s.clone();
 
         thread::spawn(move || {
             block_on(async {
