@@ -29,7 +29,8 @@ which:
   empty-queue events (the latter is courtesy of
   [diatomic-waker][diatomic-waker], a fast, spinlock-free alternative to
   `atomic-waker`),
-- **no allocation** except for blocked sender notifications,
+- **no allocation** after channel creation except for blocked sender
+  notifications,
 - **no spinlocks** whatsoever, and no mutex in the hot path (the only mutex is a
   `std::sync::mutex` used for blocked senders notifications),
 - underlying queue **optimized for single receiver**.
