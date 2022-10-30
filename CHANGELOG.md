@@ -1,10 +1,11 @@
-# ?.?.? (????-??-??)
+# 0.2.0 (2022-10-30)
 
 - Improve performance by always allocating new notifiers for blocked senders;
-  this also makes it now possible take `self` by reference in senders.
+  this also makes it now possible take `self` by reference in senders ([#3])
 - Fix soundness issue when sender is forgotten ([#2])
 
 [#2]: https://github.com/asynchronics/tachyonix/pull/2
+[#3]: https://github.com/asynchronics/tachyonix/pull/3
 
 
 # 0.1.1 (2022-10-16)

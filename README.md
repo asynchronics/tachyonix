@@ -43,7 +43,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-tachyonix = "0.1.1"
+tachyonix = "0.2.0"
 ```
 
 
@@ -93,15 +93,6 @@ be acceptable depending on your use-case:
 * just like most other async channel with the exception of `flume`, its
   low-level primitives rely on `unsafe` (see [dedicated section](#safety)),
 * zero-capacity channels (a.k.a. rendez-vous channels) are not supported.
-
-
-
-[sink]: https://docs.rs/futures/latest/futures/sink/trait.Sink.html
-
-[stream]: https://docs.rs/futures/latest/futures/stream/trait.Stream.html
-
-[channel_capacity]:
-    https://github.com/rust-lang/futures-rs/pull/984#issuecomment-383792953
 
 
 ## Safety
@@ -174,17 +165,17 @@ yet, but less relevant as a baseline as it is not meant for general-purpose
 
 #### EC2 c6i.2xlarge
 
-![Alt text](https://raw.githubusercontent.com/asynchronics/tachyobench/4a5b19a8e49a0bb9d6c35fadb30398fd510c16fe/results/sha8024945_rustc1.64_tokio/c6i.2xlarge.png)
+![Alt text](https://raw.githubusercontent.com/asynchronics/tachyobench/main/results/sha_f4642a4-rustc_1.64-tokio/c6i.2xlarge.png)
 
 
 #### EC2 c6a.2xlarge
 
-![Alt text](https://raw.githubusercontent.com/asynchronics/tachyobench/4a5b19a8e49a0bb9d6c35fadb30398fd510c16fe/results/sha8024945_rustc1.64_tokio/c6a.2xlarge.png)
+![Alt text](https://raw.githubusercontent.com/asynchronics/tachyobench/main/results/sha_f4642a4-rustc_1.64-tokio/c6a.2xlarge.png)
 
 
 #### EC2 c6g.2xlarge
 
-![Alt text](https://raw.githubusercontent.com/asynchronics/tachyobench/4a5b19a8e49a0bb9d6c35fadb30398fd510c16fe/results/sha8024945_rustc1.64_tokio/c6g.2xlarge.png)
+![Alt text](https://raw.githubusercontent.com/asynchronics/tachyobench/main/results/sha_f4642a4-rustc_1.64-tokio/c6g.2xlarge.png)
 
 
 ## License
