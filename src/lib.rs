@@ -83,8 +83,7 @@ impl<T> Inner<T> {
 
 /// The sending side of a channel.
 ///
-/// A sender can only be called from a single thread, but multiple
-/// [`Sender`]s can be created via cloning and sent to other threads.
+/// Multiple [`Sender`]s can be created via cloning.
 pub struct Sender<T> {
     /// Shared data.
     inner: Arc<Inner<T>>,
@@ -106,24 +105,23 @@ impl<T> Sender<T> {
     /// Sends a message asynchronously, if necessary waiting until enough
     /// capacity becomes available.
     pub async fn send(&self, message: T) -> Result<(), SendError<T>> {
-        // Unless the previous send future was not polled to completion, there
-        // should be a cached notifier to take.
         let mut message = Some(message);
+
         self.inner
             .sender_signal
             .wait_until(|| {
                 match self.inner.queue.push(message.take().unwrap()) {
                     Ok(()) => Some(()),
-                    Err(PushError::Full(v)) => {
+                    Err(PushError::Full(m)) => {
                         // Recycle the message.
-                        message = Some(v);
+                        message = Some(m);
 
                         None
                     }
-                    Err(PushError::Closed(v)) => {
+                    Err(PushError::Closed(m)) => {
                         // Keep the message so it can be returned in the error
                         // field.
-                        message = Some(v);
+                        message = Some(m);
 
                         Some(())
                     }
@@ -132,7 +130,7 @@ impl<T> Sender<T> {
             .await;
 
         match message {
-            Some(v) => Err(SendError(v)),
+            Some(m) => Err(SendError(m)),
             None => {
                 self.inner.receiver_signal.notify();
 
