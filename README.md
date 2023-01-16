@@ -3,7 +3,7 @@
 An asynchronous, multi-producer, single-consumer (MPSC) bounded channel
 that operates at [tachyonic][tachyon] speeds.
 
-This library is an offshot of [Asynchronix][asynchronix], an ongoing effort at a
+This library is an offshoot of [Asynchronix][asynchronix], an ongoing effort at a
 high performance asynchronous computation framework for system simulation.
 
 No laws of physics were broken in the making of this library.
