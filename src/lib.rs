@@ -148,7 +148,7 @@ impl<T> Sender<T> {
         // Notify the receiver and all blocked senders that the channel is
         // closed.
         self.inner.receiver_signal.notify();
-        self.inner.sender_signal.notify(usize::MAX);
+        self.inner.sender_signal.notify_all();
     }
 
     /// Checks if the channel is closed.
@@ -227,7 +227,7 @@ impl<T> Receiver<T> {
         // exclusive ownership.
         match unsafe { self.inner.queue.pop() } {
             Ok(message) => {
-                self.inner.sender_signal.notify(1);
+                self.inner.sender_signal.notify_one();
                 Ok(message)
             }
             Err(PopError::Empty) => Err(TryRecvError::Empty),
@@ -259,7 +259,7 @@ impl<T> Receiver<T> {
             self.inner.queue.close();
 
             // Notify all blocked senders that the channel is closed.
-            self.inner.sender_signal.notify(usize::MAX);
+            self.inner.sender_signal.notify_all();
         }
     }
 }
@@ -269,7 +269,7 @@ impl<T> Drop for Receiver<T> {
         self.inner.queue.close();
 
         // Notify all blocked senders that the channel is closed.
-        self.inner.sender_signal.notify(usize::MAX);
+        self.inner.sender_signal.notify_all();
     }
 }
 
@@ -292,7 +292,7 @@ impl<T> Stream for Receiver<T> {
             match self.inner.queue.pop() {
                 Ok(message) => {
                     // Signal to one awaiting sender that one slot was freed.
-                    self.inner.sender_signal.notify(1);
+                    self.inner.sender_signal.notify_one();
 
                     return Poll::Ready(Some(message));
                 }
@@ -313,7 +313,7 @@ impl<T> Stream for Receiver<T> {
                     self.inner.receiver_signal.unregister();
 
                     // Signal to one awaiting sender that one slot was freed.
-                    self.inner.sender_signal.notify(1);
+                    self.inner.sender_signal.notify_one();
 
                     Poll::Ready(Some(message))
                 }
