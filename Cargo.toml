@@ -20,8 +20,9 @@ keywords = ["async", "channel", "futures", "mpsc"]
 autotests = false
 
 [dependencies]
+async-event = "0.1"
 cache-padded = "1.2"
-diatomic-waker = "0.1.0"
+diatomic-waker = "0.1"
 futures-core = "0.3"
 
 [target.'cfg(tachyonix_loom)'.dependencies]

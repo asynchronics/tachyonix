@@ -39,7 +39,6 @@
 //!
 #![warn(missing_docs, missing_debug_implementations, unreachable_pub)]
 
-mod event;
 mod loom_exports;
 mod queue;
 
@@ -52,10 +51,10 @@ use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
 
+use async_event::Event;
 use diatomic_waker::primitives::DiatomicWaker;
 use futures_core::Stream;
 
-use crate::event::Event;
 use crate::queue::{PopError, PushError, Queue};
 
 /// Shared channel data.
