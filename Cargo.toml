@@ -21,18 +21,20 @@ autotests = false
 
 [dependencies]
 async-event = "0.1"
-cache-padded = "1.2"
+crossbeam-utils = "0.8"
 diatomic-waker = "0.1"
 futures-core = "0.3"
 
 [target.'cfg(tachyonix_loom)'.dependencies]
 loom = "0.5"
-waker-fn = "1.1"
 
 [dev-dependencies]
 futures-executor = { version = "0.3", default-features = false, features = ["thread-pool"] }
 futures-task = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
+
+[target.'cfg(tachyonix_loom)'.dev-dependencies]
+waker-fn = "1.1"
 
 [[test]]
 name = "integration"

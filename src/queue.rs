@@ -8,7 +8,7 @@ use crate::loom_exports::cell::UnsafeCell;
 use crate::loom_exports::debug_or_loom_assert_eq;
 use crate::loom_exports::sync::atomic::AtomicUsize;
 
-use cache_padded::CachePadded;
+use crossbeam_utils::CachePadded;
 
 /// A queue slot containing a value and an associated stamp.
 struct Slot<T> {
