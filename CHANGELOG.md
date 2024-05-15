@@ -1,3 +1,14 @@
+# 0.3.0 (2024-05-15)
+
+* Make it possible to specify a deadline when sending or receiving ([#6]).
+* Increase the MSRV to work around breakage introduced by the new `--check-cfg`
+  being enabled by default.
+
+*Note*: there are no API-breaking changes, the minor version was only increased
+due to the new MSRV.
+
+[#6]: https://github.com/asynchronics/tachyonix/pull/6
+
 # 0.2.1 (2023-07-16)
 
 - Use internally the newly spun-off `async-event` crate instead of the `event`
