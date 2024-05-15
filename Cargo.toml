@@ -8,7 +8,7 @@ name = "tachyonix"
 version = "0.2.1"
 authors = ["Serge Barral <serge.barral@asynchronics.com>"]
 edition = "2021"
-rust-version = "1.56"
+rust-version = "1.77"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/asynchronics/tachyonix"
 readme = "README.md"
@@ -20,10 +20,11 @@ keywords = ["async", "channel", "futures", "mpsc"]
 autotests = false
 
 [dependencies]
-async-event = "0.1"
+async-event = "0.2"
 crossbeam-utils = "0.8"
 diatomic-waker = "0.1"
 futures-core = "0.3"
+pin-project-lite = "0.2"
 
 [target.'cfg(tachyonix_loom)'.dependencies]
 loom = "0.5"
@@ -32,6 +33,7 @@ loom = "0.5"
 futures-executor = { version = "0.3", default-features = false, features = ["thread-pool"] }
 futures-task = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
+futures-time = "3.0"
 
 [target.'cfg(tachyonix_loom)'.dev-dependencies]
 waker-fn = "1.1"
