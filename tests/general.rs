@@ -14,11 +14,17 @@ use futures_task::noop_waker;
 #[cfg(not(miri))]
 use futures_util::pin_mut;
 use tachyonix::{channel, RecvError, SendError, TryRecvError, TrySendError};
+#[cfg(not(miri))]
+use tachyonix::{RecvTimeoutError, SendTimeoutError};
 
 // Sleep for the provided number of milliseconds.
 #[cfg(not(miri))]
 fn sleep(millis: u64) {
     thread::sleep(Duration::from_millis(millis));
+}
+#[cfg(not(miri))]
+async fn async_sleep(millis: u64) -> () {
+    futures_time::task::sleep(futures_time::time::Duration::from_millis(millis)).await;
 }
 
 // Poll the future once and keep it alive for the specified number of
@@ -88,6 +94,40 @@ fn async_send() {
     th_send.join().unwrap();
 }
 
+// Asynchronous sending with timeout.
+#[cfg(not(miri))]
+#[test]
+fn async_send_timeout() {
+    let (s, mut r) = channel(2);
+
+    let th_send = thread::spawn(move || {
+        block_on(async {
+            s.send(1).await.unwrap(); // t = t0
+            s.send(2).await.unwrap(); // t = t0
+            s.send_timeout(3, async_sleep(200)).await.unwrap(); // blocked from t = t0 to t0 + 100
+            assert_eq!(
+                s.send_timeout(4, async_sleep(100)).await, // blocked from t = t0 + 100 to y0 + 200
+                Err(SendTimeoutError::Timeout(4))
+            );
+            sleep(200);
+            assert_eq!(
+                s.send_timeout(5, async_sleep(200)).await, // t = t0 + 400
+                Err(SendTimeoutError::Closed(5))
+            );
+        })
+    });
+
+    sleep(100);
+    assert_eq!(r.try_recv(), Ok(1)); // t = t0 + 100
+    sleep(200);
+    assert_eq!(r.try_recv(), Ok(2)); // t = t0 + 300
+    assert_eq!(r.try_recv(), Ok(3)); // t = t0 + 300
+    assert_eq!(r.try_recv(), Err(TryRecvError::Empty)); // t = t0 + 300
+    drop(r);
+
+    th_send.join().unwrap();
+}
+
 // Basic asynchronous receiving functionality.
 #[cfg(not(miri))]
 #[test]
@@ -107,6 +147,39 @@ fn async_recv() {
     assert_eq!(block_on(r.recv()), Ok(7)); // t = t0 + 100
     assert_eq!(block_on(r.recv()), Ok(42)); // t = t0 + 100
     assert_eq!(r.try_recv(), Err(TryRecvError::Empty)); // t = t0 + 100
+
+    th_send.join().unwrap();
+}
+
+// Asynchronous receiving with timeout.
+#[cfg(not(miri))]
+#[test]
+fn async_recv_timeout() {
+    let (s, mut r) = channel(100);
+
+    let th_send = thread::spawn(move || {
+        s.try_send(1).unwrap(); // t = t0
+        sleep(200);
+        s.try_send(2).unwrap(); // t = t0 + 200
+        sleep(300);
+        s.try_send(3).unwrap(); // t = t0 + 500
+    });
+
+    block_on(async {
+        sleep(100);
+        assert_eq!(r.recv_timeout(async_sleep(200)).await, Ok(1)); // t = t0 + 100
+        assert_eq!(r.recv_timeout(async_sleep(200)).await, Ok(2)); // blocked from t = t0 + 100 to t0 + 200
+        assert_eq!(
+            r.recv_timeout(async_sleep(200)).await,
+            Err(RecvTimeoutError::Timeout)
+        ); // blocked from t = t0 + 200 to t0 + 400
+        sleep(200);
+        assert_eq!(r.recv_timeout(async_sleep(200)).await, Ok(3)); // t = t0 + 600
+        assert_eq!(
+            r.recv_timeout(async_sleep(200)).await,
+            Err(RecvTimeoutError::Closed)
+        ); // t = t0 + 600
+    });
 
     th_send.join().unwrap();
 }

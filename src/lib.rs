@@ -37,6 +37,12 @@
 //! # std::thread::sleep(std::time::Duration::from_millis(100)); // MIRI bug workaround
 //! ```
 //!
+
+// Temporary workaround until the `async_event_loom` flag can be whitelisted
+// without a `build.rs` [1].
+//
+// [1]: (https://github.com/rust-lang/rust/issues/124800).
+#![allow(unexpected_cfgs)]
 #![warn(missing_docs, missing_debug_implementations, unreachable_pub)]
 
 mod loom_exports;
@@ -54,6 +60,7 @@ use std::task::Poll;
 use async_event::Event;
 use diatomic_waker::primitives::DiatomicWaker;
 use futures_core::Stream;
+use pin_project_lite::pin_project;
 
 use crate::queue::{PopError, PushError, Queue};
 
@@ -131,6 +138,58 @@ impl<T> Sender<T> {
         match message {
             Some(m) => Err(SendError(m)),
             None => {
+                self.inner.receiver_signal.notify();
+
+                Ok(())
+            }
+        }
+    }
+
+    /// Sends a message asynchronously, if necessary waiting until enough
+    /// capacity becomes available or until the deadline elapses.
+    ///
+    /// The deadline is specified as a `Future` that is expected to resolves to
+    /// `()` after some duration, such as a `tokio::time::Sleep` future.
+    pub async fn send_timeout<'a, D>(
+        &'a self,
+        message: T,
+        deadline: D,
+    ) -> Result<(), SendTimeoutError<T>>
+    where
+        D: Future<Output = ()> + 'a,
+    {
+        let mut message = Some(message);
+
+        let res = self
+            .inner
+            .sender_signal
+            .wait_until_or_timeout(
+                || {
+                    match self.inner.queue.push(message.take().unwrap()) {
+                        Ok(()) => Some(()),
+                        Err(PushError::Full(m)) => {
+                            // Recycle the message.
+                            message = Some(m);
+
+                            None
+                        }
+                        Err(PushError::Closed(m)) => {
+                            // Keep the message so it can be returned in the error
+                            // field.
+                            message = Some(m);
+
+                            Some(())
+                        }
+                    }
+                },
+                deadline,
+            )
+            .await;
+
+        match (message, res) {
+            (Some(m), Some(())) => Err(SendTimeoutError::Closed(m)),
+            (Some(m), None) => Err(SendTimeoutError::Timeout(m)),
+            _ => {
                 self.inner.receiver_signal.notify();
 
                 Ok(())
@@ -243,6 +302,24 @@ impl<T> Receiver<T> {
         RecvFuture { receiver: self }.await
     }
 
+    /// Receives a message asynchronously, if necessary waiting until one
+    /// becomes available or until the deadline elapses.
+    ///
+    /// The deadline is specified as a `Future` that is expected to resolves to
+    /// `()` after some duration, such as a `tokio::time::Sleep` future.
+    pub async fn recv_timeout<D>(&mut self, deadline: D) -> Result<T, RecvTimeoutError>
+    where
+        D: Future<Output = ()>,
+    {
+        // We could of course return the future directly from a plain method,
+        // but the `async` signature makes the intent more explicit.
+        RecvTimeoutFuture {
+            receiver: self,
+            deadline,
+        }
+        .await
+    }
+
     /// Closes the queue.
     ///
     /// This prevents any further messages from being sent on the channel.
@@ -252,8 +329,9 @@ impl<T> Receiver<T> {
     ///
     /// For this reason, no counterpart to [`Sender::is_closed`] is exposed by
     /// the receiver as such method could easily be misused and lead to lost
-    /// messages. Instead, messages should be received until a [`RecvError`] or
-    /// [`TryRecvError::Closed`] error is returned.
+    /// messages. Instead, messages should be received until a [`RecvError`],
+    /// [`RecvTimeoutError::Closed`] or [`TryRecvError::Closed`] error is
+    /// returned.
     pub fn close(&self) {
         if !self.inner.queue.is_closed() {
             self.inner.queue.close();
@@ -348,6 +426,40 @@ impl<'a, T> Future for RecvFuture<'a, T> {
     }
 }
 
+pin_project! {
+    /// The future returned by the `Receiver::recv_timeout` method.
+    ///
+    /// This is just a thin wrapper over the `Stream::poll_next` implementation
+    /// which abandons if the deadline elapses.
+    struct RecvTimeoutFuture<'a, T, D> where D: Future<Output=()> {
+        receiver: &'a mut Receiver<T>,
+        #[pin]
+        deadline: D,
+    }
+}
+
+impl<'a, T, D> Future for RecvTimeoutFuture<'a, T, D>
+where
+    D: Future<Output = ()>,
+{
+    type Output = Result<T, RecvTimeoutError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        let receiver = this.receiver;
+        let deadline = this.deadline;
+
+        match Pin::new(receiver).poll_next(cx) {
+            Poll::Ready(Some(v)) => Poll::Ready(Ok(v)),
+            Poll::Ready(None) => Poll::Ready(Err(RecvTimeoutError::Closed)),
+            Poll::Pending => match deadline.poll(cx) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(()) => Poll::Ready(Err(RecvTimeoutError::Timeout)),
+            },
+        }
+    }
+}
+
 /// Creates a new channel, returning the sending and receiving sides.
 ///
 /// # Panic
@@ -380,8 +492,48 @@ impl<T: fmt::Debug> error::Error for TrySendError<T> {}
 impl<T> fmt::Display for TrySendError<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TrySendError::Full(_) => "Full(..)".fmt(f),
-            TrySendError::Closed(_) => "Closed(..)".fmt(f),
+            TrySendError::Full(_) => "sending into a full channel".fmt(f),
+            TrySendError::Closed(_) => "sending into a closed channel".fmt(f),
+        }
+    }
+}
+
+/// An error returned when an attempt to send a message asynchronously is
+/// unsuccessful.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct SendError<T>(pub T);
+
+impl<T> error::Error for SendError<T> {}
+
+impl<T> fmt::Debug for SendError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SendError").finish_non_exhaustive()
+    }
+}
+
+impl<T> fmt::Display for SendError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        "sending into a closed channel".fmt(f)
+    }
+}
+
+/// An error returned when an attempt to send a message asynchronously with a
+/// deadline is unsuccessful.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SendTimeoutError<T> {
+    /// The deadline has elapsed.
+    Timeout(T),
+    /// The channel has been closed.
+    Closed(T),
+}
+
+impl<T: fmt::Debug> error::Error for SendTimeoutError<T> {}
+
+impl<T> fmt::Display for SendTimeoutError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SendTimeoutError::Timeout(_) => "the deadline for sending has elapsed".fmt(f),
+            SendTimeoutError::Closed(_) => "sending into a closed channel".fmt(f),
         }
     }
 }
@@ -407,25 +559,6 @@ impl fmt::Display for TryRecvError {
     }
 }
 
-/// An error returned when an attempt to send a message asynchronously is
-/// unsuccessful.
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub struct SendError<T>(pub T);
-
-impl<T: fmt::Debug> error::Error for SendError<T> {}
-
-impl<T> fmt::Debug for SendError<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SendError").finish_non_exhaustive()
-    }
-}
-
-impl<T> fmt::Display for SendError<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        "sending into a closed channel".fmt(f)
-    }
-}
-
 /// An error returned when an attempt to receive a message asynchronously is
 /// unsuccessful.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -436,5 +569,26 @@ impl error::Error for RecvError {}
 impl fmt::Display for RecvError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         "receiving from a closed channel".fmt(f)
+    }
+}
+
+/// An error returned when an attempt to receive a message asynchronously with a
+/// deadline is unsuccessful.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecvTimeoutError {
+    /// The deadline has elapsed.
+    Timeout,
+    /// All senders have been dropped.
+    Closed,
+}
+
+impl error::Error for RecvTimeoutError {}
+
+impl fmt::Display for RecvTimeoutError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RecvTimeoutError::Timeout => "the deadline for receiving has elapsed".fmt(f),
+            RecvTimeoutError::Closed => "receiving from a closed channel".fmt(f),
+        }
     }
 }
