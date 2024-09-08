@@ -1,3 +1,10 @@
+# 0.3.1 (2024-09-08)
+
+* Roll back MSRV to 1.64 and make Loom a dev dependency ([#9],[#10]).
+
+[#9]: https://github.com/asynchronics/tachyonix/pull/9
+[#10]: https://github.com/asynchronics/tachyonix/pull/10
+
 # 0.3.0 (2024-05-15)
 
 * Make it possible to specify a deadline when sending or receiving ([#6]).

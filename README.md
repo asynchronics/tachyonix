@@ -44,7 +44,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-tachyonix = "0.3.0"
+tachyonix = "0.3.1"
 ```
 
 
