@@ -37,12 +37,6 @@
 //! # std::thread::sleep(std::time::Duration::from_millis(100)); // MIRI bug workaround
 //! ```
 //!
-
-// Temporary workaround until the `async_event_loom` flag can be whitelisted
-// without a `build.rs` [1].
-//
-// [1]: (https://github.com/rust-lang/rust/issues/124800).
-#![allow(unexpected_cfgs)]
 #![warn(missing_docs, missing_debug_implementations, unreachable_pub)]
 
 mod loom_exports;
