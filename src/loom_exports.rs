@@ -1,4 +1,4 @@
-#[cfg(tachyonix_loom)]
+#[cfg(all(test, tachyonix_loom))]
 #[allow(unused_imports)]
 pub(crate) mod sync {
     pub(crate) use loom::sync::{Arc, Mutex};
@@ -7,7 +7,7 @@ pub(crate) mod sync {
         pub(crate) use loom::sync::atomic::{AtomicBool, AtomicUsize};
     }
 }
-#[cfg(not(tachyonix_loom))]
+#[cfg(not(all(test, tachyonix_loom)))]
 #[allow(unused_imports)]
 pub(crate) mod sync {
     pub(crate) use std::sync::{Arc, Mutex};
@@ -17,11 +17,11 @@ pub(crate) mod sync {
     }
 }
 
-#[cfg(tachyonix_loom)]
+#[cfg(all(test, tachyonix_loom))]
 pub(crate) mod cell {
     pub(crate) use loom::cell::UnsafeCell;
 }
-#[cfg(not(tachyonix_loom))]
+#[cfg(not(all(test, tachyonix_loom)))]
 pub(crate) mod cell {
     #[derive(Debug)]
     pub(crate) struct UnsafeCell<T>(std::cell::UnsafeCell<T>);
@@ -45,11 +45,11 @@ pub(crate) mod cell {
 
 #[allow(unused_macros)]
 macro_rules! debug_or_loom_assert {
-    ($($arg:tt)*) => (if cfg!(any(debug_assertions, tachyonix_loom)) { assert!($($arg)*); })
+    ($($arg:tt)*) => (if cfg!(any(debug_assertions, all(test, tachyonix_loom))) { assert!($($arg)*); })
 }
 #[allow(unused_macros)]
 macro_rules! debug_or_loom_assert_eq {
-    ($($arg:tt)*) => (if cfg!(any(debug_assertions, tachyonix_loom)) { assert_eq!($($arg)*); })
+    ($($arg:tt)*) => (if cfg!(any(debug_assertions, all(test, tachyonix_loom))) { assert_eq!($($arg)*); })
 }
 #[allow(unused_imports)]
 pub(crate) use debug_or_loom_assert;
