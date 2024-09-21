@@ -20,9 +20,9 @@ keywords = ["async", "channel", "futures", "mpsc"]
 autotests = false
 
 [dependencies]
-async-event = "0.2.1"
+async-event = "0.2"
 crossbeam-utils = "0.8"
-diatomic-waker = "0.1"
+diatomic-waker = "0.2"
 futures-core = "0.3"
 pin-project-lite = "0.2"
 
